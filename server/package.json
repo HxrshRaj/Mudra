@@ -1,0 +1,20 @@
+{
+  "name": "mudra-server",
+  "version": "1.0.0",
+  "description": "Mudra backend - SIWE authentication + on-chain read proxy",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test:siwe": "node test/siwe.test.mjs"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.13.4",
+    "express": "^4.21.1",
+    "express-session": "^1.18.1",
+    "siwe": "^2.3.2"
+  }
+}
