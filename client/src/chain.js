@@ -1,4 +1,5 @@
-import { ethers } from "ethers";
+// ethers is large (~300 KB), and the first screen does not need it, so it is loaded on demand.
+const loadEthers = () => import("ethers").then((m) => m.ethers ?? m);
 
 export const CHAIN_ID = Number(import.meta.env.VITE_CHAIN_ID || 11155111);
 export const CHAIN_ID_HEX = "0x" + CHAIN_ID.toString(16);
@@ -8,15 +9,18 @@ const RPC_URL = import.meta.env.VITE_RPC_URL || "https://ethereum-sepolia-rpc.pu
 // from whatever provider MetaMask happens to be using internally. This is
 // what actually fetches the "real native balance from a public RPC
 // endpoint" - it's independently verifiable against a block explorer.
-const publicProvider = new ethers.JsonRpcProvider(RPC_URL);
+let publicProvider;
 
 export async function getNativeBalance(address) {
+  const ethers = await loadEthers();
+  publicProvider ??= new ethers.JsonRpcProvider(RPC_URL);
   const wei = await publicProvider.getBalance(address);
   return ethers.formatEther(wei);
 }
 
-export function getInjectedProvider() {
+export async function getInjectedProvider() {
   if (!window.ethereum) return null;
+  const ethers = await loadEthers();
   return new ethers.BrowserProvider(window.ethereum);
 }
 

@@ -1,0 +1,24 @@
+# Backend only. The frontend deploys to Vercel or Netlify (client/vercel.json, client/netlify.toml).
+# Render has no managed MySQL, so MYSQL_URL points at an external MySQL (for example Aiven or TiDB free tiers).
+services:
+  - type: web
+    name: mudra-server
+    runtime: docker
+    dockerfilePath: ./server/Dockerfile
+    dockerContext: ./server
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: CLIENT_ORIGIN       # the deployed frontend URL, exactly
+        sync: false
+      - key: MYSQL_URL           # mysql://user:pass@host:3306/dbname
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_REDIRECT_URI # https://<server>/api/oauth/github/callback
+        sync: false

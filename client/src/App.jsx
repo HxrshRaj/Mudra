@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { SiweMessage } from "siwe";
 import "./App.css";
 import * as api from "./api";
 import { CHAIN_ID, ensureChain, getInjectedProvider, getNativeBalance } from "./chain";
@@ -23,7 +22,7 @@ export default function App() {
   useEffect(() => {
     api
       .fetchMe()
-      .then((data) => setSession({ address: data.address, chainId: data.chainId }))
+      .then((data) => setSession({ address: data.address, chainId: data.chainId, linked: data.linked || {} }))
       .catch(() => setSession(null));
   }, []);
 
@@ -77,7 +76,7 @@ export default function App() {
     }
     try {
       setStatus("connecting");
-      const provider = getInjectedProvider();
+      const provider = await getInjectedProvider();
       const accounts = await provider.send("eth_requestAccounts", []);
       await ensureChain(window.ethereum);
       const network = await provider.getNetwork();
@@ -94,7 +93,8 @@ export default function App() {
     setError(null);
     try {
       setStatus("signing");
-      const provider = getInjectedProvider();
+      const { SiweMessage } = await import("siwe"); // loaded only when the user signs in
+      const provider = await getInjectedProvider();
       const signer = await provider.getSigner();
 
       const { nonce } = await api.fetchNonce();
@@ -115,7 +115,7 @@ export default function App() {
       const signature = await signer.signMessage(preparedMessage);
 
       const result = await api.verifySignature(preparedMessage, signature);
-      setSession({ address: result.address, chainId });
+      setSession({ address: result.address, chainId, linked: {} });
       setStatus("idle");
     } catch (err) {
       setStatus("error");
@@ -133,6 +133,16 @@ export default function App() {
     } catch (err) {
       setProtectedData(null);
       setError(`Protected route call failed (${err.status ?? "?"}): ${err.message}`);
+    }
+  }
+
+  async function unlinkGithub() {
+    setError(null);
+    try {
+      await api.unlinkGithub();
+      setSession((s) => ({ ...s, linked: {} }));
+    } catch (err) {
+      setError(`Could not unlink GitHub: ${err.message}`);
     }
   }
 
@@ -200,6 +210,23 @@ export default function App() {
               <button className="secondary" onClick={signOut}>
                 Sign out
               </button>
+            </div>
+            <div className="linked">
+              <h3>Linked accounts</h3>
+              {session.linked?.github ? (
+                <p>
+                  GitHub: <strong>{session.linked.github.login}</strong>{" "}
+                  <button className="secondary" onClick={unlinkGithub}>
+                    Unlink
+                  </button>
+                </p>
+              ) : (
+                <p>
+                  <a className="link-button" href={api.githubStartUrl()}>
+                    Link GitHub (OAuth)
+                  </a>
+                </p>
+              )}
             </div>
             {protectedData && (
               <pre className="json">{JSON.stringify(protectedData, null, 2)}</pre>
