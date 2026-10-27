@@ -47,3 +47,12 @@ export function logout() {
 export function fetchBalance(address) {
   return apiFetch(`/api/balance/${address}`);
 }
+
+// OAuth link flow: a full-page redirect to the backend, which sends the browser to GitHub and back.
+export function githubStartUrl() {
+  return `${API_URL}/api/oauth/github/start`;
+}
+
+export function unlinkGithub() {
+  return apiFetch("/api/oauth/github", { method: "DELETE" });
+}

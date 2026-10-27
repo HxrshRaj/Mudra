@@ -5,7 +5,7 @@ wallet, authenticate with **Sign-In with Ethereum (SIWE)**, and read live balanc
 straight from the chain.
 
 - **Frontend:** React (Vite) + [`ethers.js`](https://docs.ethers.org/v6/) v6
-- **Backend:** Node.js + Express, session-based auth, real SIWE signature
+- **Backend:** Node.js + Express + MySQL, session-based auth, real SIWE signature
   verification via the [`siwe`](https://www.npmjs.com/package/siwe) library
 - **Network:** Ethereum **Sepolia** testnet
 - **RPC:** [`https://ethereum-sepolia-rpc.publicnode.com`](https://ethereum-sepolia-rpc.publicnode.com) — a free public RPC, no API key needed
@@ -45,9 +45,12 @@ straight from the chain.
 ```
 Mudra/
   server/            Express backend
-    src/index.js      routes: /api/nonce, /api/verify, /api/me, /api/logout, /api/balance/:address
-    src/chain.js       ethers provider + native/ERC-20 balance reads
-    test/siwe.test.mjs integration test hitting a running server with real ethers wallets
+    src/app.js        routes: /api/nonce, /api/verify, /api/me, /api/logout, /api/balance/:address, /api/health
+    src/oauth.js      GitHub OAuth link/unlink (/api/oauth/github/*)
+    src/db.js         MySQL pool, migrations, user and linked-account queries
+    src/index.js      boot: migrate, session store, listen
+    src/chain.js      ethers provider + native/ERC-20 balance reads
+    test/             25 tests (SIWE, OAuth) against real MySQL
   client/             React (Vite) frontend
     src/App.jsx        UI + wallet/SIWE flow
     src/chain.js        public-RPC balance read + chain-switch helper
@@ -107,52 +110,76 @@ MetaMask installed.
    refresh the page) — it goes back to requiring sign-in, since the session
    cookie was destroyed server-side.
 
-### Confirming the security properties (already verified in this repo)
+### Automated tests (server)
 
-`server/test/siwe.test.mjs` is an integration test that runs against the
-live backend using real `ethers` wallets (no UI/MetaMask needed, since it
-tests the cryptographic and session logic directly):
+25 tests run with `node --test` against a **real MySQL** database (one throwaway database per test file) and real
+`ethers` wallets, with no browser or MetaMask needed:
 
 ```bash
-cd server
-npm start &          # in one terminal
-npm run test:siwe    # in another
+cd server && npm ci
+MYSQL_ADMIN_URL=mysql://root:password@127.0.0.1:3306 npm test
 ```
 
-It exercises, against the running server:
+- **SIWE login (14 tests):** valid login creates the user and `/api/me` works; a second login increments
+  `login_count` instead of adding a user; the session id is rotated on login; sessions are stored in MySQL;
+  a captured signature cannot be replayed from another session or reused; the nonce is burned after one attempt
+  even if it failed; wrong nonce, another key's signature, wrong chain id, missing body, no session, logout; the
+  auth endpoints are rate limited (429).
+- **GitHub OAuth (9 tests)**, against a local stand-in provider spoken to over real HTTP: the start step needs a
+  wallet session and builds the right redirect with a random `state`; the callback links the account; a wrong
+  `state` is rejected before the provider is ever called; the `state` is single-use; a failed token exchange
+  returns 502 and links nothing; one GitHub account cannot be linked to two wallets; accounts can be unlinked;
+  no access token is stored; the endpoints answer 501 when OAuth is not configured.
 
-- ✅ A validly signed SIWE message → `200`, authenticated, `/api/me` works.
-- ❌ A signature with one byte flipped → `401`, rejected, no session created.
-- ❌ A message that *claims* address A but is actually signed by wallet B
-  (impersonation) → `401`, rejected.
-- ❌ Reusing/mismatching a nonce from a different session → `401`, rejected.
-- ❌ `/api/me` with no session cookie at all → `401`.
+Writing these tests found a real bug: on the very first request after a cold start, the session table might not
+exist yet and the nonce was silently not saved. The server now waits for the session store before listening and
+returns an error if a session cannot be saved.
 
-This was run against the actual server for this build; sample output:
+CI (`.github/workflows/ci.yml`) runs the server tests against a `mysql:8` service, lints and builds the client, and
+runs a Lighthouse budget check.
 
-```
-Verify (valid sig) status: 200 { ok: true, address: '0x...' }
-/api/me status: 200 { ok: true, address: '0x...', chainId: 11155111 }
-Verify (TAMPERED sig) status: 401 { ok: false, error: 'verification error' }
-/api/me after tampered verify, status: 401 { ok: false, error: 'not authenticated' }
-Verify (wrong signer / impersonation) status: 401 { ok: false, error: 'verification error' }
-Verify (nonce mismatch / replay) status: 401 { ok: false, error: 'verification error' }
-```
+## GitHub account linking (OAuth 2.0)
 
-The on-chain balance read (`GET /api/balance/:address`) was also verified
-during development against a known Sepolia address
-(`0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045`): the API returned
-`60.848102800728318185 ETH` / `67.111000000000101 LINK`, matching
-[Sepolia Etherscan's](https://sepolia.etherscan.io/address/0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045)
-"ETH BALANCE" and the [LINK token holder page](https://sepolia.etherscan.io/token/0x779877A7B0D9E8603169DdbD7836e478b4624789?a=0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045)
-exactly.
+After signing in with a wallet you can link a GitHub account (authorization-code flow with a one-time `state`
+check). Only the GitHub user id and login are stored, never the access token.
+
+1. Create an OAuth App at github.com/settings/developers with the callback URL from `GITHUB_REDIRECT_URI`.
+2. Put `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `GITHUB_REDIRECT_URI` in `server/.env`.
+
+The flow is tested against a local stand-in for GitHub's endpoints; it has **not** been run against github.com
+because that needs your own OAuth App credentials.
+
+## Data (MySQL)
+
+`users` (one row per wallet, login counters), `linked_accounts` (provider accounts, unique per provider id and per
+user) and `sessions`. Migrations are plain SQL in `server/src/db.js`, applied on start and recorded in
+`schema_migrations`. Set `MYSQL_URL`. Tests were run locally against MariaDB 10.11 (MySQL-compatible) and in CI
+against `mysql:8`.
+
+## Frontend performance
+
+Lighthouse (mobile profile, simulated throttling) on the built client, before and after splitting `ethers` and
+`siwe` into on-demand chunks and fixing the audit findings (details in [`docs/performance.md`](docs/performance.md)):
+
+| | before | after |
+|---|---|---|
+| Performance | 89 | 100 |
+| Accessibility | 90 | 100 |
+| SEO | 82 | 100 |
+| Page weight | 351 KiB | 73 KiB |
+| First / Largest Contentful Paint | 2.8 s / 3.1 s | 1.2 s / 1.7 s |
+
+CI fails if performance, accessibility or SEO drop below the budget in `client/lighthouserc.json`.
+
+## Deploying
+
+Frontend: `client/vercel.json` or `client/netlify.toml` (single-page-app rewrite). Backend: `server/Dockerfile` and
+`render.yaml` (needs an external MySQL, because Render has no managed MySQL). **Not deployed yet**: the files are
+ready, but no live URL exists until you connect the repos and set the environment variables.
 
 ## Notes / limitations
 
-- Sessions are stored in-memory (`express-session`'s default `MemoryStore`),
-  which is fine for a demo but not for a real deployment — swap in a proper
-  session store (Redis, etc.) for production use.
+- Sessions are stored in MySQL (`express-mysql-session`), so logins survive a server restart.
 - `SESSION_SECRET` in `.env.example` is a placeholder — always set a real
   random secret outside of local development.
-- The cookie is issued with `secure: false` for local HTTP development; set
-  it to `true` and serve over HTTPS in any real deployment.
+- In production (`NODE_ENV=production`) the cookie is `Secure` and `SameSite=None`, which needs HTTPS on both the frontend and the API.

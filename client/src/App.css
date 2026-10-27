@@ -92,5 +92,9 @@ code {
 footer {
   margin-top: 2.5rem;
   font-size: 0.85rem;
-  color: #777;
+  color: #595959;
 }
+
+.linked { margin-top: 1rem; }
+.linked h3 { margin: 0 0 0.25rem; font-size: 1rem; }
+.link-button { display: inline-block; padding: 0.4rem 0.8rem; border: 1px solid #2f6feb; border-radius: 6px; color: #1d4ed8; text-decoration: none; }
